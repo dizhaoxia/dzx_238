@@ -1,9 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GUI } from 'dat.gui';
+import GIF from 'gif.js';
 import { ParticleSystem } from './ParticleSystem.js';
-
-let CCapture = null;
 
 const vertexShaderPromise = fetch('/src/shaders/vertex.glsl').then(r => r.text());
 const fragmentShaderPromise = fetch('/src/shaders/fragment.glsl').then(r => r.text());
@@ -42,6 +41,8 @@ const params = {
 
   isRecording: false,
   recordDuration: 5,
+  recordFPS: 30,
+  recordQuality: 10,
   exportGIF: () => startGIFRecording(),
   regenerate: () => regenerateGalaxy()
 };
@@ -51,23 +52,13 @@ let scene, camera, renderer, controls;
 let particleSystem, backgroundStars;
 let clock, elapsedTime = 0;
 let animating = true;
-let capturer = null;
+let gif = null;
 let recordStartTime = 0;
+let framesRecorded = 0;
+let totalFramesNeeded = 0;
+let recordingPaused = false;
 let gui;
-
-async function loadCCapture() {
-  if (CCapture) return CCapture;
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/ccapture.js@1.1.0/build/CCapture.all.min.js';
-    script.onload = () => {
-      CCapture = window.CCapture;
-      resolve(CCapture);
-    };
-    script.onerror = reject;
-    document.head.appendChild(script);
-  });
-}
+let recordProgressInterval = null;
 
 async function init() {
   showLoading(true);
@@ -88,12 +79,19 @@ async function init() {
     canvas,
     antialias: true,
     alpha: false,
-    preserveDrawingBuffer: true
+    preserveDrawingBuffer: true,
+    powerPreference: 'high-performance'
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.2;
+
+  const gl = renderer.getContext();
+  if (gl) {
+    const canvasEl = gl.canvas;
+    canvasEl.getContext('2d', { willReadFrequently: true });
+  }
 
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
@@ -178,6 +176,9 @@ function createGalaxy() {
 }
 
 function regenerateGalaxy() {
+  if (params.isRecording) {
+    stopGIFRecording(true);
+  }
   showLoading(true);
   setTimeout(() => {
     createGalaxy();
@@ -245,63 +246,177 @@ function createGUI() {
 
   const exportFolder = gui.addFolder('📤 导出');
   exportFolder.add(params, 'recordDuration', 1, 30, 1).name('录制时长(秒)');
+  exportFolder.add(params, 'recordFPS', 10, 60, 1).name('帧率(FPS)');
+  exportFolder.add(params, 'recordQuality', 1, 20, 1).name('质量(1=最佳)');
   exportFolder.add(params, 'exportGIF').name('🎬 导出 GIF');
 
   gui.add({ toggleAnimation: () => {
-    animating = !animating;
+    if (params.isRecording) {
+      recordingPaused = !recordingPaused;
+      updateRecordingIndicator();
+    } else {
+      animating = !animating;
+    }
   }}, 'toggleAnimation').name('⏯️ 暂停/继续');
+
+  gui.add({ cancelRecording: () => {
+    if (params.isRecording) {
+      stopGIFRecording(true);
+    }
+  }}, 'cancelRecording').name('❌ 取消录制').listen().hide();
+}
+
+function updateRecordingIndicator() {
+  const indicator = document.getElementById('recording-indicator');
+  if (!indicator) return;
+
+  if (params.isRecording) {
+    indicator.classList.remove('hidden');
+    const progress = Math.min(100, (framesRecorded / totalFramesNeeded) * 100);
+    const statusText = recordingPaused ? '已暂停' : '录制中';
+    indicator.innerHTML = `
+      <span class="rec-dot" style="animation: ${recordingPaused ? 'none' : 'pulse 1s ease-in-out infinite'}"></span>
+      <span>${statusText} ${progress.toFixed(0)}%</span>
+    `;
+  } else {
+    indicator.classList.add('hidden');
+  }
 }
 
 async function startGIFRecording() {
   if (params.isRecording) return;
 
   try {
-    await loadCCapture();
-  } catch (e) {
-    alert('GIF录制组件加载失败，请检查网络连接');
-    return;
+    const canvas = renderer.domElement;
+    const width = canvas.width;
+    const height = canvas.height;
+
+    totalFramesNeeded = params.recordDuration * params.recordFPS;
+    framesRecorded = 0;
+    recordingPaused = false;
+
+    gif = new GIF({
+      workers: 4,
+      quality: params.recordQuality,
+      width: width,
+      height: height,
+      workerScript: 'https://unpkg.com/gif.js@0.2.0/dist/gif.worker.js'
+    });
+
+    gif.on('start', () => {
+      params.isRecording = true;
+      recordStartTime = elapsedTime;
+      updateRecordingIndicator();
+
+      const cancelBtn = gui.domElement.querySelector('[id$="cancelRecording"]');
+      if (cancelBtn) cancelBtn.parentElement.style.display = '';
+    });
+
+    gif.on('progress', (p) => {
+      const indicator = document.getElementById('recording-indicator');
+      if (indicator) {
+        indicator.innerHTML = `
+          <span class="rec-dot"></span>
+          <span>编码中 ${(p * 100).toFixed(0)}%</span>
+        `;
+      }
+    });
+
+    gif.on('finished', (blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `galaxy-${Date.now()}.gif`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      stopGIFRecording(false);
+    });
+
+    gif.on('error', (error) => {
+      console.error('GIF录制错误:', error);
+      alert('GIF录制失败: ' + error.message);
+      stopGIFRecording(true);
+    });
+
+    gif.render();
+
+    if (recordProgressInterval) clearInterval(recordProgressInterval);
+    recordProgressInterval = setInterval(updateRecordingIndicator, 200);
+
+  } catch (error) {
+    console.error('启动GIF录制失败:', error);
+    alert('启动GIF录制失败: ' + error.message);
+    stopGIFRecording(true);
   }
-
-  params.isRecording = true;
-  recordStartTime = elapsedTime;
-  showRecordingIndicator(true);
-
-  capturer = new CCapture({
-    format: 'gif',
-    framerate: 30,
-    verbose: false,
-    quality: 100,
-    name: `galaxy-${Date.now()}`
-  });
-
-  capturer.start();
 }
 
-function stopGIFRecording() {
-  if (!capturer || !params.isRecording) return;
+function stopGIFRecording(cancelled = false) {
+  if (recordProgressInterval) {
+    clearInterval(recordProgressInterval);
+    recordProgressInterval = null;
+  }
 
-  capturer.stop();
-  capturer.save();
-  capturer = null;
+  if (gif && !cancelled && framesRecorded > 0) {
+    try {
+      gif.render();
+    } catch (e) {
+      console.error('GIF渲染失败:', e);
+    }
+  } else if (gif && cancelled) {
+    try {
+      gif.abort();
+    } catch (e) {}
+  }
+
+  gif = null;
   params.isRecording = false;
-  showRecordingIndicator(false);
+  recordingPaused = false;
+  framesRecorded = 0;
+  totalFramesNeeded = 0;
+
+  updateRecordingIndicator();
+}
+
+let frameAccumulator = 0;
+const recordInterval = 1 / params.recordFPS;
+
+function addFrameToGIF() {
+  if (!gif || !params.isRecording || recordingPaused) return;
+
+  frameAccumulator += clock.getDelta();
+
+  if (frameAccumulator >= recordInterval) {
+    frameAccumulator = 0;
+
+    try {
+      const canvas = renderer.domElement;
+      gif.addFrame(canvas, { copy: true, delay: recordInterval * 1000 });
+      framesRecorded++;
+      updateRecordingIndicator();
+
+      if (framesRecorded >= totalFramesNeeded) {
+        stopGIFRecording(false);
+      }
+    } catch (error) {
+      console.error('添加帧失败:', error);
+    }
+  }
 }
 
 function animate() {
   requestAnimationFrame(animate);
 
+  if (!clock) return;
+
   const deltaTime = clock.getDelta();
 
-  if (animating) {
+  if (animating && !recordingPaused) {
     elapsedTime += deltaTime;
     if (particleSystem) {
       particleSystem.updatePhysics(deltaTime, params);
-    }
-
-    if (params.isRecording) {
-      if (elapsedTime - recordStartTime >= params.recordDuration) {
-        stopGIFRecording();
-      }
     }
   }
 
@@ -316,14 +431,21 @@ function animate() {
     backgroundStars.rotation.y += deltaTime * 0.01;
   }
 
-  renderer.render(scene, camera);
+  try {
+    renderer.render(scene, camera);
+  } catch (e) {
+    console.error('渲染错误:', e);
+  }
 
-  if (params.isRecording && capturer) {
-    capturer.capture(renderer.domElement);
+  if (params.isRecording) {
+    addFrameToGIF();
   }
 }
 
 function onResize() {
+  if (params.isRecording) {
+    stopGIFRecording(true);
+  }
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -331,12 +453,6 @@ function onResize() {
 
 function showLoading(show) {
   const el = document.getElementById('loading');
-  if (show) el.classList.remove('hidden');
-  else el.classList.add('hidden');
-}
-
-function showRecordingIndicator(show) {
-  const el = document.getElementById('recording-indicator');
   if (show) el.classList.remove('hidden');
   else el.classList.add('hidden');
 }

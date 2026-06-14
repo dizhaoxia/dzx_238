@@ -11,7 +11,7 @@
   "dependencies": {
     "three": "^0.160.0",
     "dat.gui": "^0.7.9",
-    "ccapture.js": "^1.1.0"
+    "gif.js": "^0.2.0"
   },
   "devDependencies": {
     "vite": "^5.0.0"
