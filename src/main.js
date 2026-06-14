@@ -58,6 +58,7 @@ let framesRecorded = 0;
 let totalFramesNeeded = 0;
 let recordingPaused = false;
 let gui;
+let cancelRecordingCtrl = null;
 let recordProgressInterval = null;
 
 async function init() {
@@ -259,11 +260,12 @@ function createGUI() {
     }
   }}, 'toggleAnimation').name('⏯️ 暂停/继续');
 
-  gui.add({ cancelRecording: () => {
+  cancelRecordingCtrl = gui.add({ cancelRecording: () => {
     if (params.isRecording) {
       stopGIFRecording(true);
     }
-  }}, 'cancelRecording').name('❌ 取消录制').listen().hide();
+  }}, 'cancelRecording').name('❌ 取消录制');
+  cancelRecordingCtrl.domElement.parentElement.style.display = 'none';
 }
 
 function updateRecordingIndicator() {
@@ -308,8 +310,9 @@ async function startGIFRecording() {
       recordStartTime = elapsedTime;
       updateRecordingIndicator();
 
-      const cancelBtn = gui.domElement.querySelector('[id$="cancelRecording"]');
-      if (cancelBtn) cancelBtn.parentElement.style.display = '';
+      if (cancelRecordingCtrl) {
+        cancelRecordingCtrl.domElement.parentElement.style.display = '';
+      }
     });
 
     gif.on('progress', (p) => {
@@ -376,6 +379,10 @@ function stopGIFRecording(cancelled = false) {
   recordingPaused = false;
   framesRecorded = 0;
   totalFramesNeeded = 0;
+
+  if (cancelRecordingCtrl) {
+    cancelRecordingCtrl.domElement.parentElement.style.display = 'none';
+  }
 
   updateRecordingIndicator();
 }
