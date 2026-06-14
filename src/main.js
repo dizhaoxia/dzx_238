@@ -6,6 +6,8 @@ import { ParticleSystem } from './ParticleSystem.js';
 
 const vertexShaderPromise = fetch('/src/shaders/vertex.glsl').then(r => r.text());
 const fragmentShaderPromise = fetch('/src/shaders/fragment.glsl').then(r => r.text());
+const trailVertexShaderPromise = fetch('/src/shaders/trail_vertex.glsl').then(r => r.text());
+const trailFragmentShaderPromise = fetch('/src/shaders/trail_fragment.glsl').then(r => r.text());
 
 const params = {
   particleCount: 5000,
@@ -39,6 +41,14 @@ const params = {
   background: '#000010',
   showBackgroundStars: true,
 
+  showTrails: true,
+  trailOpacity: 0.6,
+  trailSizeFactor: 0.5,
+  trailLength: 30,
+  trailDecay: 2.0,
+  trailFramerate: 30,
+  speedInfluence: 1.0,
+
   isRecording: false,
   recordDuration: 5,
   recordFPS: 30,
@@ -48,6 +58,7 @@ const params = {
 };
 
 let shaders = null;
+let trailShaders = null;
 let scene, camera, renderer, controls;
 let particleSystem, backgroundStars;
 let clock, elapsedTime = 0;
@@ -102,11 +113,14 @@ async function init() {
   controls.autoRotate = params.autoRotate;
   controls.autoRotateSpeed = params.autoRotateSpeed;
 
-  const [vertexShader, fragmentShader] = await Promise.all([
+  const [vertexShader, fragmentShader, trailVertexShader, trailFragmentShader] = await Promise.all([
     vertexShaderPromise,
-    fragmentShaderPromise
+    fragmentShaderPromise,
+    trailVertexShaderPromise,
+    trailFragmentShaderPromise
   ]);
   shaders = { vertex: vertexShader, fragment: fragmentShader };
+  trailShaders = { vertex: trailVertexShader, fragment: trailFragmentShader };
 
   createBackgroundStars();
   createGalaxy();
@@ -168,12 +182,18 @@ function createBackgroundStars() {
 
 function createGalaxy() {
   if (particleSystem) {
+    if (particleSystem.trailPoints) {
+      scene.remove(particleSystem.trailPoints);
+    }
     scene.remove(particleSystem.points);
     particleSystem.dispose();
   }
 
-  particleSystem = new ParticleSystem(params.particleCount, params, shaders);
+  particleSystem = new ParticleSystem(params.particleCount, params, shaders, trailShaders);
   scene.add(particleSystem.points);
+  if (particleSystem.trailPoints) {
+    scene.add(particleSystem.trailPoints);
+  }
 }
 
 function regenerateGalaxy() {
@@ -228,6 +248,14 @@ function createGUI() {
   visualFolder.addColor(params, 'colorB').name('颜色 B(中)');
   visualFolder.addColor(params, 'colorC').name('颜色 C(核)');
   visualFolder.add(params, 'colorIntensity', 0.1, 5, 0.1).name('颜色强度');
+
+  visualFolder.add(params, 'showTrails').name('粒子拖尾');
+  visualFolder.add(params, 'trailLength', 5, 60, 1).name('拖尾长度').onFinishChange(regenerateGalaxy);
+  visualFolder.add(params, 'trailOpacity', 0.0, 1.0, 0.05).name('拖尾透明度');
+  visualFolder.add(params, 'trailSizeFactor', 0.1, 1.5, 0.05).name('拖尾大小');
+  visualFolder.add(params, 'trailDecay', 0.5, 5.0, 0.1).name('拖尾衰减');
+  visualFolder.add(params, 'trailFramerate', 10, 60, 1).name('拖尾帧率');
+  visualFolder.add(params, 'speedInfluence', 0.0, 3.0, 0.1).name('速度影响');
 
   const sceneFolder = gui.addFolder('🌆 场景设置');
   sceneFolder.addColor(params, 'background').name('背景颜色').onChange(v => {
