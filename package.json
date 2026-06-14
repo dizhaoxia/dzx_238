@@ -1,0 +1,19 @@
+{
+  "name": "particle-galaxy-generator",
+  "version": "1.0.0",
+  "description": "粒子星系生成器 - 基于Three.js的N体万有引力模拟",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5007",
+    "build": "vite build",
+    "preview": "vite preview --port 5007"
+  },
+  "dependencies": {
+    "three": "^0.160.0",
+    "dat.gui": "^0.7.9",
+    "ccapture.js": "^1.1.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
